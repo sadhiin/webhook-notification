@@ -9,8 +9,12 @@ services:
     environment:
       - PROVIDER_SIM_URL=http://provider-sim:8000
       - DATABASE_URL=postgresql://notifier_user:notifier_pass@postgres:5432/notifier_db
+      - CALLBACK_URL=http://notifier-ui:8000/api/provider-callback
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
+      provider-sim:
+        condition: service_started
 
   provider-sim:
     build: ./provider-sim
@@ -34,6 +38,11 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./notifier-ui/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U notifier_user -d notifier_db"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
 networks:
   app-network:
