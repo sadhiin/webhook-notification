@@ -1,20 +1,17 @@
 # Notification Webhooks System
 
-A simple real-time notification demo using FastAPI, PostgreSQL and WebSockets. The
-project demonstrates a webhook-based integration where a main app forwards
-messages to a provider simulator, which then calls back via a webhook to update
-message status. The UI receives live updates over a WebSocket connection.
+A real-time webhook notification demo built with FastAPI, PostgreSQL, and WebSockets.
+The project is organized in module-based service packages (`app/...`) for clean
+separation of API routes, schemas, services, and infrastructure.
 
 ## Architecture
 
 The repo contains three cooperating components:
 
-- **notifier-ui**: Main FastAPI application. Hosts the web UI, provides
-	REST endpoints, stores messages in PostgreSQL, and broadcasts updates over
-	WebSockets.
-- **provider-sim**: Lightweight FastAPI service that simulates an external
-	provider. It accepts messages, waits 2–5 seconds, then POSTs a callback to
-	the notifier's webhook endpoint to indicate success or failure.
+- **notifier-ui**: Main FastAPI app. Hosts the web UI, provides REST APIs,
+	stores messages in PostgreSQL, and broadcasts updates over WebSockets.
+- **provider-sim**: External provider simulator. Accepts outbound requests,
+	waits 2–5 seconds, then calls back the notifier webhook with success/failure.
 - **postgres**: PostgreSQL database storing messages and delivery status.
 
 ## Key Features
@@ -25,7 +22,7 @@ The repo contains three cooperating components:
 - Message persistence in PostgreSQL
 - Container-ready with Docker Compose
 
-## Quick Start
+## Quick Start (Docker)
 
 1. Build and start all services:
 
@@ -33,29 +30,26 @@ The repo contains three cooperating components:
 docker-compose up --build
 ```
 
-2. Open the UI in your browser: http://localhost:8000
+2. Open the UI: http://localhost:8000
 
-3. Provider simulator (HTTP API): http://localhost:8001
+3. Provider simulator API: http://localhost:8001
 
-4. PostgreSQL is available on the Docker network at `postgres:5432` (host
-	 forwarding may expose it at `localhost:5432` depending on `docker-compose`).
+4. PostgreSQL is available on Docker network host `postgres:5432`.
 
-## How to Use
-
-### Send a message (UI)
-
-1. Open http://localhost:8000
-2. Type a message and click **Send Message**
-3. The message is created in the DB with status PENDING and shown in the UI
-4. Watch the status update in real time (PENDING → DELIVERED / ERROR)
-
-### Flow (high-level)
+## Message Flow
 
 1. User submits message → `notifier-ui` creates DB record (status: PENDING)
 2. Background task calls `provider-sim` `/api/send`
 3. `provider-sim` waits 2–5s, decides success/failure, then calls the
 	 `notifier-ui` callback `/api/provider-callback`
 4. `notifier-ui` updates the DB and broadcasts the new status to WebSocket clients
+
+## How to Use
+
+1. Open http://localhost:8000
+2. Type a message and click **Send Message**
+3. Message is stored as `PENDING`
+4. Status updates in real-time to `DELIVERED` or `ERROR`
 
 ## API Endpoints
 
@@ -71,11 +65,76 @@ docker-compose up --build
 
 - `POST /api/send` — Simulates processing a message (2–5s delay; success rate ~85%)
 
+## API Examples
+
+Run these after `docker-compose up --build`.
+
+Create a message in `notifier-ui`:
+
+```bash
+curl -X POST http://localhost:8000/api/messages \
+	-H "Content-Type: application/json" \
+	-d '{"text":"Hello from API"}'
+```
+
+Fetch latest messages:
+
+```bash
+curl "http://localhost:8000/api/messages?limit=10"
+```
+
+Send directly to `provider-sim` (which will callback to notifier):
+
+```bash
+curl -X POST http://localhost:8001/api/send \
+	-H "Content-Type: application/json" \
+	-d '{
+		"message_id": "11111111-1111-1111-1111-111111111111",
+		"text": "Provider direct test",
+		"callback_url": "http://localhost:8000/api/provider-callback"
+	}'
+```
+
+Simulate provider callback success manually:
+
+```bash
+curl -X POST http://localhost:8000/api/provider-callback \
+	-H "Content-Type: application/json" \
+	-d '{
+		"message_id": "11111111-1111-1111-1111-111111111111",
+		"status": "completed",
+		"provider_job_id": "demo-job-123"
+	}'
+```
+
+Simulate provider callback error manually:
+
+```bash
+curl -X POST http://localhost:8000/api/provider-callback \
+	-H "Content-Type: application/json" \
+	-d '{
+		"message_id": "11111111-1111-1111-1111-111111111111",
+		"status": "error",
+		"error": "Simulated failure"
+	}'
+```
+
 ## Message Status Codes
 
 - `0` — PENDING (created and awaiting processing)
 - `1` — DELIVERED (provider succeeded)
 - `2` — ERROR (provider failed)
+
+## Schema Modules
+
+Schemas are organized by domain and service:
+
+- **notifier-ui**
+	- `app/schemas/message.py` → API request/response and message models
+	- `app/schemas/events.py` → WebSocket event envelope model
+- **provider-sim**
+	- `app/schemas/message.py` → provider send request/response models
+	- `app/schemas/callback.py` → provider callback payload models
 
 ## Project Layout
 
@@ -83,17 +142,23 @@ docker-compose up --build
 webhook-notification/
 ├── docker-compose.yml
 ├── notifier-ui/
-│   ├── main.py
-│   ├── models.py
-│   ├── database.py
-│   ├── websocket_manager.py
-	 │   ├── services.py
-	 │   ├── schema.sql
-	 │   ├── static/index.html
-	 │   ├── requirements.txt
-	 │   └── Dockerfile
+│   ├── app/
+│   │   ├── main.py
+│   │   ├── api/routes/
+│   │   ├── core/
+│   │   ├── db/
+│   │   ├── realtime/
+│   │   ├── schemas/
+│   │   └── services/
+│   ├── static/index.html
+│   ├── schema.sql
+│   ├── requirements.txt
+│   └── Dockerfile
 ├── provider-sim/
-│   ├── main.py
+│   ├── app/
+│   │   ├── main.py
+│   │   ├── schemas/
+│   │   └── services/
 │   ├── requirements.txt
 │   └── Dockerfile
 └── README.md
@@ -121,10 +186,14 @@ docker-compose down
 
 ### Run components individually
 
-- To run `notifier-ui` locally (without Docker), install dependencies from
-	`notifier-ui/requirements.txt` and run `python notifier-ui/main.py`.
-- For `provider-sim`, install `provider-sim/requirements.txt` and run
-	`python provider-sim/main.py`.
+Run each service from its own folder:
+
+- `notifier-ui`
+	- install: `pip install -r requirements.txt`
+	- run: `uvicorn app.main:app --host 0.0.0.0 --port 8000`
+- `provider-sim`
+	- install: `pip install -r requirements.txt`
+	- run: `uvicorn app.main:app --host 0.0.0.0 --port 8001`
 
 ## Database Schema
 
@@ -145,6 +214,8 @@ CREATE TABLE messages (
 
 - `DATABASE_URL` — PostgreSQL connection string (used by `notifier-ui`)
 - `PROVIDER_SIM_URL` — Provider simulator base URL
+- `CALLBACK_URL` — Callback endpoint sent to provider simulator
+- `NOTIFIER_UI_URL` — Notifier base URL used by provider-sim configuration
 
 Set these in your environment or in the `docker-compose.yml` service definitions.
 
