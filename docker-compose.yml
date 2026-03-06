@@ -1,0 +1,43 @@
+
+services:
+  notifier-ui:
+    build: ./notifier-ui
+    ports:
+      - "8000:8000"
+    networks:
+      - app-network
+    environment:
+      - PROVIDER_SIM_URL=http://provider-sim:8000
+      - DATABASE_URL=postgresql://notifier_user:notifier_pass@postgres:5432/notifier_db
+    depends_on:
+      - postgres
+
+  provider-sim:
+    build: ./provider-sim
+    ports:
+      - "8001:8000"
+    networks:
+      - app-network
+    environment:
+      - NOTIFIER_UI_URL=http://notifier-ui:8000
+
+  postgres:
+    image: postgres:15-alpine
+    ports:
+      - "5432:5432"
+    networks:
+      - app-network
+    environment:
+      - POSTGRES_DB=notifier_db
+      - POSTGRES_USER=notifier_user
+      - POSTGRES_PASSWORD=notifier_pass
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./notifier-ui/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  postgres_data:

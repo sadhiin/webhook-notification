@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Message Notifier</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        
+        h1 {
+            color: #333;
+            text-align: center;
+        }
+        
+        .send-form {
+            margin-bottom: 30px;
+            padding: 20px;
+            background: #f9f9f9;
+            border-radius: 5px;
+        }
+        
+        .form-group {
+            margin-bottom: 15px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        
+        textarea {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            resize: vertical;
+            font-family: Arial, sans-serif;
+        }
+        
+        button {
+            background: #007bff;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        
+        button:hover {
+            background: #0056b3;
+        }
+        
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        
+        .messages {
+            margin-top: 30px;
+        }
+        
+        .message-item {
+            background: white;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            padding: 15px;
+            margin-bottom: 15px;
+        }
+        
+        .message-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        
+        .message-id {
+            font-size: 12px;
+            color: #666;
+            font-family: monospace;
+        }
+        
+        .message-time {
+            font-size: 12px;
+            color: #666;
+        }
+        
+        .message-text {
+            margin-bottom: 10px;
+            font-size: 14px;
+            line-height: 1.4;
+        }
+        
+        .status {
+            padding: 4px 8px;
+            border-radius: 3px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        
+        .status-pending {
+            background: #fff3cd;
+            color: #856404;
+        }
+        
+        .status-completed {
+            background: #d4edda;
+            color: #155724;
+        }
+        
+        .status-error {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        
+        .refresh-btn {
+            background: #28a745;
+            margin-left: 10px;
+        }
+        
+        .refresh-btn:hover {
+            background: #218838;
+        }
+        
+        .loading {
+            text-align: center;
+            color: #666;
+            font-style: italic;
+        }
+        
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Message Notifier</h1>
+        
+        <div class="send-form">
+            <h3>Send New Message</h3>
+            <form id="messageForm">
+                <div class="form-group">
+                    <label for="messageText">Message:</label>
+                    <textarea id="messageText" rows="4" placeholder="Enter your message here..." required></textarea>
+                </div>
+                <button type="submit" id="sendBtn">Send Message</button>
+                <button type="button" id="refreshBtn" class="refresh-btn">Refresh Messages</button>
+            </form>
+            <div id="sendResult"></div>
+        </div>
+        
+        <div class="messages">
+            <h3>Message History <span style="font-size: 12px; font-weight: normal;">WebSocket: <span id="connectionStatus" style="color: orange;">Connecting...</span></span></h3>
+            <div id="messagesList">
+                <div class="loading">Loading messages...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = '/api';
+        let messagesCache = [];
+        let socket = null;
+        
+        function getStatusDisplay(status) {
+            switch(status) {
+                case 0: return { text: 'PENDING', class: 'status-pending' };
+                case 1: return { text: 'DELIVERED', class: 'status-completed' };
+                case 2: return { text: 'ERROR', class: 'status-error' };
+                default: return { text: 'UNKNOWN', class: 'status-error' };
+            }
+        }
+        
+        function formatDate(dateString) {
+            return new Date(dateString).toLocaleString();
+        }
+        
+        function connectWebSocket() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}/ws`;
+            
+            socket = new WebSocket(wsUrl);
+            
+            socket.onopen = function(event) {
+                console.log('WebSocket connected');
+                document.getElementById('connectionStatus').textContent = 'Connected';
+                document.getElementById('connectionStatus').style.color = 'green';
+            };
+            
+            socket.onmessage = function(event) {
+                const data = JSON.parse(event.data);
+                if (data.type === 'message_update') {
+                    handleMessageUpdate(data.data);
+                }
+            };
+            
+            socket.onclose = function(event) {
+                console.log('WebSocket disconnected');
+                document.getElementById('connectionStatus').textContent = 'Disconnected';
+                document.getElementById('connectionStatus').style.color = 'red';
+                
+                // Reconnect after 3 seconds
+                setTimeout(connectWebSocket, 3000);
+            };
+            
+            socket.onerror = function(error) {
+                console.error('WebSocket error:', error);
+            };
+        }
+        
+        function handleMessageUpdate(updateData) {
+            // Find and update the message in cache
+            const messageIndex = messagesCache.findIndex(msg => msg.message_uuid === updateData.message_uuid);
+            if (messageIndex !== -1) {
+                messagesCache[messageIndex].status = updateData.status;
+                messagesCache[messageIndex].updated_at = new Date().toISOString();
+                displayMessages(messagesCache);
+            }
+        }
+        
+        async function loadMessages() {
+            try {
+                const response = await fetch(`${API_BASE}/messages`);
+                if (!response.ok) throw new Error('Failed to load messages');
+                
+                const messages = await response.json();
+                messagesCache = messages;
+                displayMessages(messages);
+            } catch (error) {
+                document.getElementById('messagesList').innerHTML = 
+                    `<div class="error">Error loading messages: ${error.message}</div>`;
+            }
+        }
+        
+        function displayMessages(messages) {
+            const container = document.getElementById('messagesList');
+            
+            if (messages.length === 0) {
+                container.innerHTML = '<div class="loading">No messages yet</div>';
+                return;
+            }
+            
+            const html = messages.map(msg => {
+                const status = getStatusDisplay(msg.status);
+                return `
+                    <div class="message-item" data-message-id="${msg.message_uuid}">
+                        <div class="message-header">
+                            <div class="message-id">ID: ${msg.message_uuid}</div>
+                            <div class="message-time">${formatDate(msg.created_at)}</div>
+                        </div>
+                        <div class="message-text">${escapeHtml(msg.text)}</div>
+                        <span class="status ${status.class}">${status.text}</span>
+                    </div>
+                `;
+            }).join('');
+            
+            container.innerHTML = html;
+        }
+        
+        function escapeHtml(unsafe) {
+            return unsafe
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        }
+        
+        async function sendMessage(text) {
+            try {
+                const response = await fetch(`${API_BASE}/messages`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ text }),
+                });
+                
+                if (!response.ok) throw new Error('Failed to send message');
+                
+                const result = await response.json();
+                return result;
+            } catch (error) {
+                throw error;
+            }
+        }
+        
+        document.getElementById('messageForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const textArea = document.getElementById('messageText');
+            const sendBtn = document.getElementById('sendBtn');
+            const resultDiv = document.getElementById('sendResult');
+            
+            const text = textArea.value.trim();
+            if (!text) return;
+            
+            sendBtn.disabled = true;
+            sendBtn.textContent = 'Sending...';
+            resultDiv.innerHTML = '';
+            
+            try {
+                const result = await sendMessage(text);
+                resultDiv.innerHTML = `<div style="color: green; margin-top: 10px;">Message sent! ID: ${result.id}</div>`;
+                textArea.value = '';
+                
+                // Refresh messages to show new message
+                setTimeout(loadMessages, 500);
+            } catch (error) {
+                resultDiv.innerHTML = `<div class="error">Error: ${error.message}</div>`;
+            } finally {
+                sendBtn.disabled = false;
+                sendBtn.textContent = 'Send Message';
+            }
+        });
+        
+        document.getElementById('refreshBtn').addEventListener('click', loadMessages);
+        
+        // Initialize
+        connectWebSocket();
+        loadMessages();
+    </script>
+</body>
+</html>
